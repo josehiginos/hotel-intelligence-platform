@@ -35,6 +35,8 @@ data/raw/*.xlsx
 data/processed/*.csv
 data/processed/*.pkl
 data/processed/*.parquet
+data/*.db
+data/hotel.db
 
 # MLflow
 mlruns/
