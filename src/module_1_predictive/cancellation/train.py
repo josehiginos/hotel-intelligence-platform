@@ -62,8 +62,38 @@ def prepare_data(df: pd.DataFrame, feature_cols: list) -> dict:
     }
 
 
-def get_models() -> dict:
+def get_models(fast: bool = False) -> dict:
     """Define models with tuned hyperparameters."""
+    if fast:
+        # Smaller set for Cloud Agent / local bootstrap smoke training.
+        return {
+            "Logistic Regression": LogisticRegression(
+                max_iter=500,
+                random_state=RANDOM_SEED,
+                class_weight="balanced",
+                C=0.1,
+            ),
+            "XGBoost": XGBClassifier(
+                n_estimators=80,
+                max_depth=5,
+                learning_rate=0.15,
+                subsample=0.8,
+                colsample_bytree=0.8,
+                scale_pos_weight=1.5,
+                random_state=RANDOM_SEED,
+                eval_metric="auc",
+                verbosity=0,
+            ),
+            "LightGBM": LGBMClassifier(
+                n_estimators=80,
+                max_depth=6,
+                learning_rate=0.15,
+                is_unbalance=True,
+                random_state=RANDOM_SEED,
+                verbose=-1,
+            ),
+        }
+
     models = {
         "Logistic Regression": LogisticRegression(
             max_iter=1000,
@@ -166,9 +196,9 @@ def cross_validate_model(model, X_train, y_train, model_name: str) -> dict:
     return cv_metrics
 
 
-def train_all_models(data: dict) -> tuple[dict, dict]:
+def train_all_models(data: dict, fast: bool = False) -> tuple[dict, dict]:
     """Train all models and return results."""
-    models = get_models()
+    models = get_models(fast=fast)
     all_results = {}
     trained_models = {}
 
@@ -191,11 +221,35 @@ def train_all_models(data: dict) -> tuple[dict, dict]:
         if name == "Logistic Regression":
             model.fit(X_train_scaled, y_train)
             test_metrics = evaluate_model(model, X_test_scaled, y_test, name)
-            cv_metrics = cross_validate_model(model, X_train_scaled, y_train, name)
+            if fast:
+                cv_metrics = {
+                    "cv_roc_auc": test_metrics["auc_roc"],
+                    "cv_f1": test_metrics["f1"],
+                    "cv_precision": test_metrics["precision"],
+                    "cv_recall": test_metrics["recall"],
+                    "cv_roc_auc_std": 0.0,
+                    "cv_f1_std": 0.0,
+                    "cv_precision_std": 0.0,
+                    "cv_recall_std": 0.0,
+                }
+            else:
+                cv_metrics = cross_validate_model(model, X_train_scaled, y_train, name)
         else:
             model.fit(X_train, y_train)
             test_metrics = evaluate_model(model, X_test, y_test, name)
-            cv_metrics = cross_validate_model(model, X_train, y_train, name)
+            if fast:
+                cv_metrics = {
+                    "cv_roc_auc": test_metrics["auc_roc"],
+                    "cv_f1": test_metrics["f1"],
+                    "cv_precision": test_metrics["precision"],
+                    "cv_recall": test_metrics["recall"],
+                    "cv_roc_auc_std": 0.0,
+                    "cv_f1_std": 0.0,
+                    "cv_precision_std": 0.0,
+                    "cv_recall_std": 0.0,
+                }
+            else:
+                cv_metrics = cross_validate_model(model, X_train, y_train, name)
 
         all_results[name] = {**test_metrics, **cv_metrics}
         trained_models[name] = model
@@ -230,7 +284,11 @@ def save_results(results: dict, trained_models: dict, best_model_name: str, data
     results_df = pd.DataFrame(results).T
     results_df.to_csv(MODELS_DIR / "model_comparison.csv")
 
-    # Save metadata
+    # Save metadata (include train medians for live form feature defaults)
+    feature_medians = {
+        col: float(data["X_train"][col].median())
+        for col in data["feature_names"]
+    }
     metadata = {
         "best_model": best_model_name,
         "best_auc_roc": results[best_model_name]["auc_roc"],
@@ -238,6 +296,7 @@ def save_results(results: dict, trained_models: dict, best_model_name: str, data
         "train_size": len(data["X_train"]),
         "test_size": len(data["X_test"]),
         "feature_names": data["feature_names"],
+        "feature_medians": feature_medians,
     }
     with open(MODELS_DIR / "metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
@@ -245,14 +304,14 @@ def save_results(results: dict, trained_models: dict, best_model_name: str, data
     logger.info(f"Models saved to {MODELS_DIR}")
 
 
-def run_training_pipeline(df: pd.DataFrame, feature_cols: list) -> dict:
+def run_training_pipeline(df: pd.DataFrame, feature_cols: list, fast: bool = False) -> dict:
     """Run the complete training pipeline."""
     logger.info("=" * 60)
-    logger.info("  MODEL TRAINING PIPELINE")
+    logger.info("  MODEL TRAINING PIPELINE" + (" (FAST)" if fast else ""))
     logger.info("=" * 60)
 
     data = prepare_data(df, feature_cols)
-    results, trained_models = train_all_models(data)
+    results, trained_models = train_all_models(data, fast=fast)
     best_model_name = select_best_model(results)
     save_results(results, trained_models, best_model_name, data)
 
@@ -281,12 +340,18 @@ def run_training_pipeline(df: pd.DataFrame, feature_cols: list) -> dict:
 
 
 def main():
+    import argparse
+
     from src.module_1_predictive.cancellation.eda import load_data
     from src.module_1_predictive.cancellation.features import run_feature_engineering
 
+    parser = argparse.ArgumentParser(description="Train cancellation models")
+    parser.add_argument("--fast", action="store_true", help="Faster training for bootstrap/smoke runs")
+    args = parser.parse_args()
+
     df = load_data()
     df, feature_cols = run_feature_engineering(df)
-    run_training_pipeline(df, feature_cols)
+    run_training_pipeline(df, feature_cols, fast=args.fast)
 
 
 if __name__ == "__main__":

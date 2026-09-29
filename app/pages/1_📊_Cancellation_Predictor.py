@@ -157,15 +157,34 @@ if results_path.exists():
             special_requests = st.slider(t("special_requests", lang), 0, 5, 1)
 
         if st.button(f"🔮 {t('predict_btn', lang)}", use_container_width=True):
-            # Simulated prediction based on key risk factors
-            # In production, the full 62-feature pipeline runs behind the scenes
-            risk_score = min(
-                0.15 + (lead_time / 1000) + (0.3 if deposit_type == "No Deposit" else -0.2) +
-                (prev_cancellations * 0.1) - (special_requests * 0.05) -
-                (is_repeated * 0.15) + (0.1 if hotel_type == "City Hotel" else 0),
-                0.99,
+            from src.module_1_predictive.cancellation.predict import (
+                heuristic_cancellation_probability,
+                predict_cancellation_probability,
             )
-            risk_score = max(risk_score, 0.05)
+
+            prediction = predict_cancellation_probability(
+                lead_time=lead_time,
+                adr=adr,
+                adults=adults,
+                hotel_type=hotel_type,
+                deposit_type=deposit_type,
+                market_segment=market_segment,
+                is_repeated=is_repeated,
+                prev_cancellations=prev_cancellations,
+                special_requests=special_requests,
+            )
+            if prediction is None:
+                prediction = heuristic_cancellation_probability(
+                    lead_time=lead_time,
+                    hotel_type=hotel_type,
+                    deposit_type=deposit_type,
+                    is_repeated=is_repeated,
+                    prev_cancellations=prev_cancellations,
+                    special_requests=special_requests,
+                )
+                st.caption("Using heuristic fallback — run `python scripts/bootstrap_dev.py --train-cancellation --fast` for the trained model.")
+
+            risk_score = prediction["probability"]
 
             r1, r2 = st.columns(2)
             with r1:
@@ -177,11 +196,13 @@ if results_path.exists():
                 else:
                     label = t("high_risk", lang)
 
+                source_note = prediction.get("model_name", "")
                 st.markdown(f"""
                 <div class="premium-card" style="text-align: center;">
                     <div class="kpi-label">{t('cancel_risk', lang)}</div>
                     <div class="kpi-value" style="color: {color}; font-size: 3rem;">{risk_score:.1%}</div>
                     <div style="color: {color}; font-weight: 600; font-size: 1.2rem;">{label} {t('risk_label', lang)}</div>
+                    <div style="color: {COLORS['text_secondary']}; margin-top: 8px; font-size: 0.85rem;">{source_note}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -236,6 +257,9 @@ if results_path.exists():
 
 else:
     info_box(t("no_data", lang), "warning")
-    st.info("Run `python -m src.module_1_predictive.cancellation.train` to generate model results.")
+    st.info(
+        "Run `python scripts/bootstrap_dev.py --train-cancellation --fast` "
+        "(or `python -m src.module_1_predictive.cancellation.train`) to generate model results."
+    )
 
 sidebar_info()
