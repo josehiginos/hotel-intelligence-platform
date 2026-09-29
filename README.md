@@ -158,11 +158,12 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 # Install dependencies
 pip install --pre -r requirements.txt
 
-# Generate synthetic data
+# Generate synthetic data (already committed; re-run only if regenerating)
 python data/synthetic/generate_all.py
 
-# Initialize chatbot database (creates SQLite from CSV files)
-python -c "from src.module_3_conversational.database.init_db import initialize_database; initialize_database()"
+# Initialize SQLite DB (and optionally train cancellation models for the predictor page)
+python scripts/bootstrap_dev.py
+# python scripts/bootstrap_dev.py --train-cancellation --fast
 
 # Run the Streamlit app
 streamlit run app/main.py
